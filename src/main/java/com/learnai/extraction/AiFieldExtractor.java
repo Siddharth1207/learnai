@@ -22,6 +22,9 @@ public class AiFieldExtractor implements FieldExtractor {
 
     @Override
     public DocumentFields extract(String documentText) {
+        if (documentText == null || documentText.isBlank()) {
+            return DocumentFields.empty();
+        }
         DocumentFields fields = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
                 .user(documentText)
