@@ -9,13 +9,10 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 
-import org.springframework.ai.audio.transcription.TranscriptionModel;
-import org.springframework.ai.openai.OpenAiAudioTranscriptionModel;
-import org.springframework.ai.openai.OpenAiAudioTranscriptionOptions;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+import org.springframework.util.MimeType;
 
 /**
  * Converts speech to text and, for non-English audio, translates the transcript to English.
@@ -26,39 +23,25 @@ public class AudioTranscriptionService {
 
     private static final DateTimeFormatter FILE_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
-    private final ObjectProvider<TranscriptionModel> transcriptionModel;
+    private final SpeechToText speechToText;
     private final TextTranslator translator;
     private final Path outputDir;
 
-    public AudioTranscriptionService(ObjectProvider<TranscriptionModel> transcriptionModel,
-            TextTranslator translator, @Value("${learnai.audio.output-dir:transcripts}") Path outputDir) {
-        this.transcriptionModel = transcriptionModel;
+    public AudioTranscriptionService(SpeechToText speechToText, TextTranslator translator,
+            @Value("${learnai.audio.output-dir:transcripts}") Path outputDir) {
+        this.speechToText = speechToText;
         this.translator = translator;
         this.outputDir = outputDir;
     }
 
-    public TranscriptionResult transcribe(Resource audio, InputLanguage language) {
-        TranscriptionModel model = transcriptionModel.getIfAvailable();
-        if (model == null) {
-            throw new AiNotConfiguredException(
-                    "Speech-to-text is not configured. Set LEARNAI_CHAT_MODEL=openai and OPENAI_API_KEY.");
-        }
-        String transcript = model.transcribe(audio, optionsFor(model, language)).trim();
+    public TranscriptionResult transcribe(Resource audio, MimeType mimeType, InputLanguage language) {
+        String transcript = speechToText.transcribe(audio, mimeType, language).trim();
 
         boolean translate = !language.isEnglish() && !transcript.isEmpty();
         String englishText = translate ? translator.translateToEnglish(transcript, language) : transcript;
 
         Path savedFile = save(englishText);
         return new TranscriptionResult(language.code(), transcript, translate, englishText, savedFile.toString());
-    }
-
-    // Spring AI's merge overwrites the configured model, so start from the model's own defaults.
-    private static OpenAiAudioTranscriptionOptions optionsFor(TranscriptionModel model, InputLanguage language) {
-        OpenAiAudioTranscriptionOptions.Builder options = OpenAiAudioTranscriptionOptions.builder();
-        if (model instanceof OpenAiAudioTranscriptionModel openAiModel) {
-            options.from(openAiModel.getOptions());
-        }
-        return options.language(language.code()).build();
     }
 
     private Path save(String text) {

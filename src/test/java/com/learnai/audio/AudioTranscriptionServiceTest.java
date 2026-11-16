@@ -1,9 +1,7 @@
 package com.learnai.audio;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -13,15 +11,12 @@ import static org.mockito.Mockito.when;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.ai.audio.transcription.TranscriptionModel;
-import org.springframework.ai.openai.OpenAiAudioTranscriptionOptions;
-import org.springframework.beans.factory.support.StaticListableBeanFactory;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
+import org.springframework.util.MimeType;
 
 class AudioTranscriptionServiceTest {
 
@@ -30,16 +25,18 @@ class AudioTranscriptionServiceTest {
     @TempDir
     Path outputDir;
 
-    private final TranscriptionModel model = mock(TranscriptionModel.class);
+    private static final MimeType MP3 = MimeType.valueOf("audio/mpeg");
+
+    private final SpeechToText model = mock(SpeechToText.class);
     private final TextTranslator translator = mock(TextTranslator.class);
     private final Resource audio = new ByteArrayResource(new byte[] {1, 2, 3});
 
     @Test
     void translatesNonEnglishAudioAndSavesEnglishText() throws Exception {
-        when(model.transcribe(eq(audio), argThat(o -> o instanceof OpenAiAudioTranscriptionOptions opts && "hi".equals(opts.getLanguage())))).thenReturn(" नमस्ते दुनिया ");
+        when(model.transcribe(audio, MP3, HINDI)).thenReturn(" नमस्ते दुनिया ");
         when(translator.translateToEnglish("नमस्ते दुनिया", HINDI)).thenReturn("Hello world");
 
-        TranscriptionResult result = service(model).transcribe(audio, HINDI);
+        TranscriptionResult result = service().transcribe(audio, MP3, HINDI);
 
         assertThat(result.transcript()).isEqualTo("नमस्ते दुनिया");
         assertThat(result.translated()).isTrue();
@@ -50,9 +47,9 @@ class AudioTranscriptionServiceTest {
 
     @Test
     void savesEnglishAudioWithoutTranslation() throws Exception {
-        when(model.transcribe(eq(audio), any())).thenReturn("Hello world");
+        when(model.transcribe(eq(audio), eq(MP3), any())).thenReturn("Hello world");
 
-        TranscriptionResult result = service(model).transcribe(audio, InputLanguage.ENGLISH);
+        TranscriptionResult result = service().transcribe(audio, MP3, InputLanguage.ENGLISH);
 
         assertThat(result.translated()).isFalse();
         assertThat(Files.readString(Path.of(result.savedFile()))).isEqualTo("Hello world");
@@ -61,33 +58,25 @@ class AudioTranscriptionServiceTest {
 
     @Test
     void eachCallWritesANewFile() {
-        when(model.transcribe(eq(audio), any())).thenReturn("Hello");
-        AudioTranscriptionService service = service(model);
+        when(model.transcribe(eq(audio), eq(MP3), any())).thenReturn("Hello");
+        AudioTranscriptionService service = service();
 
-        assertThat(service.transcribe(audio, InputLanguage.ENGLISH).savedFile())
-                .isNotEqualTo(service.transcribe(audio, InputLanguage.ENGLISH).savedFile());
+        assertThat(service.transcribe(audio, MP3, InputLanguage.ENGLISH).savedFile())
+                .isNotEqualTo(service.transcribe(audio, MP3, InputLanguage.ENGLISH).savedFile());
     }
 
     @Test
     void skipsTranslationForSilentAudio() {
-        when(model.transcribe(eq(audio), any())).thenReturn("  ");
+        when(model.transcribe(eq(audio), eq(MP3), any())).thenReturn("  ");
 
-        TranscriptionResult result = service(model).transcribe(audio, HINDI);
+        TranscriptionResult result = service().transcribe(audio, MP3, HINDI);
 
         assertThat(result.translated()).isFalse();
         assertThat(result.englishText()).isEmpty();
         verifyNoInteractions(translator);
     }
 
-    @Test
-    void failsWhenNoTranscriptionModelConfigured() {
-        assertThatThrownBy(() -> service(null).transcribe(audio, HINDI))
-                .isInstanceOf(AiNotConfiguredException.class);
-    }
-
-    private AudioTranscriptionService service(TranscriptionModel transcriptionModel) {
-        StaticListableBeanFactory beans = new StaticListableBeanFactory(
-                transcriptionModel == null ? Map.of() : Map.of("transcriptionModel", transcriptionModel));
-        return new AudioTranscriptionService(beans.getBeanProvider(TranscriptionModel.class), translator, outputDir);
+    private AudioTranscriptionService service() {
+        return new AudioTranscriptionService(model, translator, outputDir);
     }
 }

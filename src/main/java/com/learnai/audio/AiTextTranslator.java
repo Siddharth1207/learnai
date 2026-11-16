@@ -24,7 +24,7 @@ public class AiTextTranslator implements TextTranslator {
         ChatModel model = chatModel.getIfAvailable();
         if (model == null) {
             throw new AiNotConfiguredException(
-                    "Translation is not configured. Set LEARNAI_CHAT_MODEL=openai and OPENAI_API_KEY.");
+                    "Translation is not configured. Set LEARNAI_CHAT_MODEL=google-genai and GEMINI_API_KEY.");
         }
         String translation = ChatClient.create(model).prompt()
                 .system(s -> s.text(SYSTEM_PROMPT).param("language", sourceLanguage.displayName()))

@@ -40,6 +40,20 @@ class AudioTranscriptionControllerTest {
     }
 
     @Test
+    void rejectsNonAudioFile() throws Exception {
+        MockMultipartFile text = new MockMultipartFile("file", "notes.txt", "text/plain", new byte[] {1});
+        mockMvc.perform(multipart("/api/audio/transcribe").file(text).param("inputLanguage", "hi"))
+                .andExpect(status().isUnsupportedMediaType());
+    }
+
+    @Test
+    void detectsAudioTypeFromFileNameWhenContentTypeIsGeneric() throws Exception {
+        MockMultipartFile wav = new MockMultipartFile("file", "clip.wav", "application/octet-stream", new byte[] {1});
+        mockMvc.perform(multipart("/api/audio/transcribe").file(wav).param("inputLanguage", "hi"))
+                .andExpect(status().isServiceUnavailable());
+    }
+
+    @Test
     void returnsServiceUnavailableWhenAiNotConfigured() throws Exception {
         mockMvc.perform(multipart("/api/audio/transcribe").file(AUDIO).param("inputLanguage", "hi"))
                 .andExpect(status().isServiceUnavailable());

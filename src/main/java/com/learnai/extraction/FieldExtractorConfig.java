@@ -12,7 +12,7 @@ public class
 FieldExtractorConfig {
 
     /**
-     * Uses the AI extractor when a chat model is configured (e.g. OPENAI_API_KEY is set),
+     * Uses the AI extractor when a chat model is configured (LEARNAI_CHAT_MODEL=google-genai with GEMINI_API_KEY),
      * otherwise falls back to regex-based extraction.
      */
     @Bean

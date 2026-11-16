@@ -24,12 +24,12 @@ Requires Java 17+.
 ./mvnw spring-boot:run
 ```
 
-Enable AI extraction (OpenAI):
+Enable AI (Google Gemini, free tier). Get an API key at https://aistudio.google.com/apikey:
 
 ```bash
-export LEARNAI_CHAT_MODEL=openai
-export OPENAI_API_KEY=sk-...
-# optional: export OPENAI_MODEL=gpt-4o-mini
+export LEARNAI_CHAT_MODEL=google-genai
+export GEMINI_API_KEY=...
+# optional: export GEMINI_MODEL=gemini-2.5-flash
 ./mvnw spring-boot:run
 ```
 
@@ -37,15 +37,15 @@ Without these variables the app uses `RegexFieldExtractor`, which reads a line l
 
 ## Audio transcription
 
-`POST /api/audio/transcribe` converts speech to text with OpenAI (`whisper-1` by default, override with
-`OPENAI_TRANSCRIPTION_MODEL`). Requires `LEARNAI_CHAT_MODEL=openai` and `OPENAI_API_KEY`; otherwise it returns 503.
+`POST /api/audio/transcribe` sends the audio to Gemini, which transcribes it. Requires
+`LEARNAI_CHAT_MODEL=google-genai` and `GEMINI_API_KEY`; otherwise it returns 503.
 
 | Param | Description |
 |-------|-------------|
-| `file` | Audio file (mp3, mp4, mpeg, mpga, m4a, wav, webm; max 25MB) |
+| `file` | Audio file (wav, mp3, aiff, aac, ogg, flac; max 20MB). Non-audio files get 415 |
 | `inputLanguage` | Spoken language as an ISO-639-1 code (`hi`) or English name (`Hindi`) |
 
-If `inputLanguage` is not English, the transcript is translated to English with the chat model. The English text is
+If `inputLanguage` is not English, the transcript is translated to English with a second Gemini call. The English text is
 saved to a new file in `learnai.audio.output-dir` (default `./transcripts`, env `LEARNAI_AUDIO_OUTPUT_DIR`).
 
 ```bash
