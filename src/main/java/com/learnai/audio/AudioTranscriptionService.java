@@ -10,6 +10,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 
 import org.springframework.ai.audio.transcription.TranscriptionModel;
+import org.springframework.ai.openai.OpenAiAudioTranscriptionModel;
 import org.springframework.ai.openai.OpenAiAudioTranscriptionOptions;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,14 +43,22 @@ public class AudioTranscriptionService {
             throw new AiNotConfiguredException(
                     "Speech-to-text is not configured. Set LEARNAI_CHAT_MODEL=openai and OPENAI_API_KEY.");
         }
-        String transcript = model.transcribe(audio,
-                OpenAiAudioTranscriptionOptions.builder().language(language.code()).build()).trim();
+        String transcript = model.transcribe(audio, optionsFor(model, language)).trim();
 
         boolean translate = !language.isEnglish() && !transcript.isEmpty();
         String englishText = translate ? translator.translateToEnglish(transcript, language) : transcript;
 
         Path savedFile = save(englishText);
         return new TranscriptionResult(language.code(), transcript, translate, englishText, savedFile.toString());
+    }
+
+    // Spring AI's merge overwrites the configured model, so start from the model's own defaults.
+    private static OpenAiAudioTranscriptionOptions optionsFor(TranscriptionModel model, InputLanguage language) {
+        OpenAiAudioTranscriptionOptions.Builder options = OpenAiAudioTranscriptionOptions.builder();
+        if (model instanceof OpenAiAudioTranscriptionModel openAiModel) {
+            options.from(openAiModel.getOptions());
+        }
+        return options.language(language.code()).build();
     }
 
     private Path save(String text) {
