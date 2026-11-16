@@ -35,6 +35,33 @@ export OPENAI_API_KEY=sk-...
 
 Without these variables the app uses `RegexFieldExtractor`, which reads a line like `Name: John Doe`.
 
+## Audio transcription
+
+`POST /api/audio/transcribe` converts speech to text with OpenAI (`whisper-1` by default, override with
+`OPENAI_TRANSCRIPTION_MODEL`). Requires `LEARNAI_CHAT_MODEL=openai` and `OPENAI_API_KEY`; otherwise it returns 503.
+
+| Param | Description |
+|-------|-------------|
+| `file` | Audio file (mp3, mp4, mpeg, mpga, m4a, wav, webm; max 25MB) |
+| `inputLanguage` | Spoken language as an ISO-639-1 code (`hi`) or English name (`Hindi`) |
+
+If `inputLanguage` is not English, the transcript is translated to English with the chat model. The English text is
+saved to a new file in `learnai.audio.output-dir` (default `./transcripts`, env `LEARNAI_AUDIO_OUTPUT_DIR`).
+
+```bash
+curl -F file=@clip.mp3 -F inputLanguage=Hindi http://localhost:8080/api/audio/transcribe
+```
+
+```json
+{
+  "inputLanguage": "hi",
+  "transcript": "नमस्ते दुनिया",
+  "translated": true,
+  "englishText": "Hello world",
+  "savedFile": "transcripts/transcript-20261116-210501-1a2b3c4d-en.txt"
+}
+```
+
 ## API
 
 ```bash
