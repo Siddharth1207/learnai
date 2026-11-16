@@ -42,7 +42,7 @@ Without these variables the app uses `RegexFieldExtractor`, which reads a line l
 
 | Param | Description |
 |-------|-------------|
-| `file` | Audio file (wav, mp3, aiff, aac, ogg, flac; max 20MB). Non-audio files get 415 |
+| `file` | Audio file (wav, mp3, aiff, aac, ogg, flac; max 14MB). Non-audio files get 415 |
 | `inputLanguage` | Spoken language as an ISO-639-1 code (`hi`) or English name (`Hindi`) |
 
 If `inputLanguage` is not English, the transcript is translated to English with a second Gemini call. The English text is
