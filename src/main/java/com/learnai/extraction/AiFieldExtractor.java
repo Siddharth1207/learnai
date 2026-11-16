@@ -7,12 +7,10 @@ import org.springframework.ai.chat.client.ChatClient;
  */
 public class AiFieldExtractor implements FieldExtractor {
 
-    private static final String SYSTEM_PROMPT = """
-            You extract structured fields from documents.
-            Return the person's or entity's name exactly as it is written in the document,
-            character for character, without correcting, normalising or removing any characters.
-            If the document does not contain a name, return null for the name.
-            """;
+    private static final String SYSTEM_PROMPT = "You extract structured fields from documents.\n" +
+                                                "Return the person's or entity's name exactly as it is written in the document,\n" +
+                                                "character for character, without correcting, normalising or removing any characters.\n" +
+                                                "If the document does not contain a name, return null for the name.\n";
 
     private final ChatClient chatClient;
 

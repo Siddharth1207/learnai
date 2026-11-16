@@ -7,7 +7,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
-public class FieldExtractorConfig {
+public class
+
+FieldExtractorConfig {
 
     /**
      * Uses the AI extractor when a chat model is configured (e.g. OPENAI_API_KEY is set),
