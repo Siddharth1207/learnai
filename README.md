@@ -24,16 +24,43 @@ Requires Java 17+.
 ./mvnw spring-boot:run
 ```
 
-Enable AI extraction (OpenAI):
+Enable AI (Google Gemini, free tier). Get an API key at https://aistudio.google.com/apikey:
 
 ```bash
-export LEARNAI_CHAT_MODEL=openai
-export OPENAI_API_KEY=sk-...
-# optional: export OPENAI_MODEL=gpt-4o-mini
+export LEARNAI_CHAT_MODEL=google-genai
+export GEMINI_API_KEY=...
+# optional: export GEMINI_MODEL=gemini-2.5-flash
 ./mvnw spring-boot:run
 ```
 
 Without these variables the app uses `RegexFieldExtractor`, which reads a line like `Name: John Doe`.
+
+## Audio transcription
+
+`POST /api/audio/transcribe` sends the audio to Gemini, which transcribes it. Requires
+`LEARNAI_CHAT_MODEL=google-genai` and `GEMINI_API_KEY`; otherwise it returns 503.
+
+| Param | Description |
+|-------|-------------|
+| `file` | Audio file (wav, mp3, aiff, aac, ogg, flac; max 14MB). Non-audio files get 415 |
+| `inputLanguage` | Spoken language as an ISO-639-1 code (`hi`) or English name (`Hindi`) |
+
+If `inputLanguage` is not English, the transcript is translated to English with a second Gemini call. The English text is
+saved to a new file in `learnai.audio.output-dir` (default `./transcripts`, env `LEARNAI_AUDIO_OUTPUT_DIR`).
+
+```bash
+curl -F file=@clip.mp3 -F inputLanguage=Hindi http://localhost:8080/api/audio/transcribe
+```
+
+```json
+{
+  "inputLanguage": "hi",
+  "transcript": "नमस्ते दुनिया",
+  "translated": true,
+  "englishText": "Hello world",
+  "savedFile": "transcripts/transcript-20261116-210501-1a2b3c4d-en.txt"
+}
+```
 
 ## API
 
