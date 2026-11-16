@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 public class RegexFieldExtractor implements FieldExtractor {
 
     private static final Pattern NAME_LINE = Pattern.compile(
-            "^\\s*(?:full\\s+)?name\\s*[:=\\-]\\s*(.+?)\\s*$",
+            "^\\h*(?:full\\h+)?name\\h*[:=\\-]\\h*(.+?)\\h*$",
             Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
 
     @Override

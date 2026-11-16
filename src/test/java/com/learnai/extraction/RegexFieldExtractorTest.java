@@ -18,4 +18,10 @@ class RegexFieldExtractorTest {
     void returnsNullWhenNoNameLine() {
         assertThat(extractor.extract("Nothing relevant here").name()).isNull();
     }
+
+    @Test
+    void doesNotCaptureNextLineWhenNameIsBlank() {
+        String text = "Name:\nEmployment History\nAcme Corp";
+        assertThat(extractor.extract(text).name()).isNull();
+    }
 }
