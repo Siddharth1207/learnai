@@ -103,7 +103,7 @@ Locally, MongoDB runs in Docker using the `mongodb/mongodb-atlas-local` image (s
 Changing the embedding model or filter fields requires dropping the existing search index (or using a new index name).
 
 ```bash
-# Store text with metadata
+# Store text with metadata (max 100 documents per request)
 curl -H 'Content-Type: application/json' \
   -d '{"documents":[{"text":"Invoice 42 for John Doe, total 100 EUR","metadata":{"category":"invoice"}}]}' \
   http://localhost:8080/api/vectors/documents

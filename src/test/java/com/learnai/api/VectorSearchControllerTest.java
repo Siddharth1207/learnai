@@ -53,6 +53,20 @@ class VectorSearchControllerTest {
     }
 
     @Test
+    void rejectsNullDocumentEntry() throws Exception {
+        mockMvc.perform(post("/api/vectors/documents").contentType(MediaType.APPLICATION_JSON).content("{\"documents\":[null]}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void rejectsMoreThan100Documents() throws Exception {
+        String documents = String.join(",", java.util.Collections.nCopies(101, "{\"text\":\"hello\"}"));
+        mockMvc.perform(post("/api/vectors/documents").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"documents\":[" + documents + "]}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void rejectsEmptyUpload() throws Exception {
         MockMultipartFile empty = new MockMultipartFile("file", "a.txt", "text/plain", new byte[0]);
         mockMvc.perform(multipart("/api/vectors/documents/upload").file(empty))
