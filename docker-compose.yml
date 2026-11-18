@@ -1,0 +1,30 @@
+# Local MongoDB with Atlas Vector Search for Docker Desktop (Windows/macOS/Linux).
+# Start:  docker compose up -d
+# Stop:   docker compose down        (add -v to also delete the stored data)
+services:
+  mongodb:
+    image: mongodb/mongodb-atlas-local:8.0
+    container_name: learnai-mongodb
+    hostname: mongodb
+    environment:
+      MONGODB_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-learnai}
+      MONGODB_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-learnai}
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    volumes:
+      # Named volumes (not Windows bind mounts) keep file permissions working on Docker Desktop.
+      - mongodb-data:/data/db
+      - mongodb-config:/data/configdb
+      - mongodb-mongot:/data/mongot
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  mongodb-data:
+  mongodb-config:
+  mongodb-mongot:

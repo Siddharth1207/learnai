@@ -62,6 +62,69 @@ curl -F file=@clip.mp3 -F inputLanguage=Hindi http://localhost:8080/api/audio/tr
 }
 ```
 
+## Vector search (MongoDB Atlas Vector Search)
+
+Text is embedded with Gemini (`gemini-embedding-001`) and stored in MongoDB; searches use `$vectorSearch`.
+Locally, MongoDB runs in Docker using the `mongodb/mongodb-atlas-local` image (supports Atlas Vector Search).
+
+1. Start MongoDB (Docker Desktop on Windows, PowerShell or cmd, from the project folder):
+
+   ```powershell
+   docker compose up -d
+   docker compose ps   # wait until learnai-mongodb is "healthy"
+   ```
+
+   It listens on `localhost:27017` with user/password `learnai`/`learnai`. Data is kept in Docker volumes;
+   `docker compose down -v` deletes it.
+
+2. Run the app with AI and vector search enabled (PowerShell):
+
+   ```powershell
+   $env:LEARNAI_CHAT_MODEL="google-genai"
+   $env:GEMINI_API_KEY="..."
+   $env:LEARNAI_VECTOR_STORE="mongodb-atlas"
+   .\mvnw.cmd spring-boot:run
+   ```
+
+   On startup the app creates the `vector_store` collection and the `vector_index` search index.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `LEARNAI_VECTOR_STORE` | `none` | `mongodb-atlas` enables vector search; otherwise `/api/vectors/**` returns 503 |
+| `MONGODB_URI` | built from the vars below | Full connection string (overrides the vars below) |
+| `MONGODB_HOST` / `MONGODB_PORT` | `localhost` / `27017` | MongoDB address |
+| `MONGODB_USERNAME` / `MONGODB_PASSWORD` | `learnai` / `learnai` | Also used by `docker-compose.yml` to create the user |
+| `MONGODB_DATABASE` | `learnai` | Database name |
+| `LEARNAI_EMBEDDING_MODEL` | value of `LEARNAI_CHAT_MODEL` | `google-genai` enables Gemini embeddings |
+| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Embedding model (index dimensions are set from it) |
+| `LEARNAI_VECTOR_COLLECTION` / `LEARNAI_VECTOR_INDEX` | `vector_store` / `vector_index` | Collection and search index names |
+| `LEARNAI_VECTOR_FILTER_FIELDS` | `source,category` | Metadata fields usable in `filter` |
+
+Changing the embedding model or filter fields requires dropping the existing search index (or using a new index name).
+
+```bash
+# Store text with metadata (max 100 documents per request)
+curl -H 'Content-Type: application/json' \
+  -d '{"documents":[{"text":"Invoice 42 for John Doe, total 100 EUR","metadata":{"category":"invoice"}}]}' \
+  http://localhost:8080/api/vectors/documents
+# -> {"ids":["4c1f..."]}
+
+# Upload a file (PDF, DOCX, TXT, ...); it is split into chunks with metadata source=<file name>
+curl -F file=@form.pdf -F category=form http://localhost:8080/api/vectors/documents/upload
+
+# Semantic search (topK default 4, similarityThreshold 0..1 default 0, filter optional)
+curl -H 'Content-Type: application/json' \
+  -d '{"query":"how much does John owe?","topK":3,"filter":"category == '\''invoice'\''"}' \
+  http://localhost:8080/api/vectors/search
+# -> [{"id":"4c1f...","text":"Invoice 42 ...","score":0.83,"metadata":{"category":"invoice"}}]
+
+# Delete by id
+curl -X DELETE 'http://localhost:8080/api/vectors/documents?ids=4c1f...'
+```
+
+The integration test `MongoVectorSearchIT` runs against the Docker MongoDB with a local fake embedding model (no API key):
+`LEARNAI_MONGODB_IT=true ./mvnw test -Dtest=MongoVectorSearchIT`.
+
 ## API
 
 ```bash
