@@ -125,6 +125,107 @@ curl -X DELETE 'http://localhost:8080/api/vectors/documents?ids=4c1f...'
 The integration test `MongoVectorSearchIT` runs against the Docker MongoDB with a local fake embedding model (no API key):
 `LEARNAI_MONGODB_IT=true ./mvnw test -Dtest=MongoVectorSearchIT`.
 
+## Property listings (sellers) and purchases (buyers)
+
+Sellers list **URBAN** or **RURAL** properties with coordinates, either by filling a form or by speaking. Listings are
+stored in MongoDB (`properties` collection) and their text is embedded in the vector store (`category` metadata
+`property-urban` / `property-rural`), so buyers can search them in natural language (typed or spoken). The search is
+RAG: the best listings are retrieved from MongoDB Atlas Vector Search and Gemini answers the buyer's request from them.
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/properties` | Create a listing from the form (JSON below) |
+| `POST /api/properties/voice` | Create a listing from the seller's voice description (multipart) |
+| `GET /api/properties?propertyType=&status=` | List listings (`URBAN`/`RURAL`, `AVAILABLE`/`SOLD`) |
+| `GET /api/properties/{id}` | Get a listing |
+| `POST /api/properties/search` | Buyer search (RAG) with optional filters |
+| `POST /api/properties/search/voice` | Buyer search from a spoken request (multipart) |
+| `POST /api/properties/{id}/purchase` | Buy a listing at its listed price (409 if already sold) |
+| `GET /api/properties/{id}/purchase` | Get the purchase of a sold listing |
+
+Requirements: MongoDB (`docker compose up -d`) for all endpoints. Voice endpoints need `LEARNAI_CHAT_MODEL=google-genai`
+and `GEMINI_API_KEY` (503 otherwise). Search needs `LEARNAI_VECTOR_STORE=mongodb-atlas` (503 otherwise); listings created
+while the vector store is disabled are saved but not searchable (`vectorDocumentId: null`). The default
+`LEARNAI_VECTOR_FILTER_FIELDS` (`source,category`) is enough; no index change is needed.
+
+### Form
+
+```bash
+curl -H 'Content-Type: application/json' http://localhost:8080/api/properties -d '{
+  "sellerName": "Asha Verma", "sellerContact": "+91 98100 00001", "propertyType": "URBAN",
+  "title": "2BHK near Koregaon Park metro", "description": "Sunny flat with a balcony",
+  "address": {"street": "12 MG Road", "locality": "Koregaon Park", "city": "Pune", "state": "Maharashtra", "postalCode": "411001", "country": "India"},
+  "coordinates": {"latitude": 18.5362, "longitude": 73.8940},
+  "area": 1200, "areaUnit": "SQ_FT", "price": 9500000, "currency": "INR",
+  "urban": {"buildingType": "apartment", "bedrooms": 2, "bathrooms": 2, "floor": 5, "totalFloors": 12, "furnishing": "semi-furnished", "parking": true}
+}'
+```
+
+Required: `sellerName`, `sellerContact`, `propertyType`, `address.city`, `coordinates` (latitude -90..90, longitude
+-180..180), `area` + `areaUnit` (`SQ_FT`, `SQ_M`, `SQ_YD`, `ACRE`, `HECTARE`) and `price`. `currency` defaults to `INR`
+and `title` to e.g. "Urban property in Pune". Use `urban` only for URBAN listings and `rural` only for RURAL ones:
+
+```json
+"rural": {"landUse": "orchard", "soilType": "black", "waterSource": "borewell", "irrigated": true, "roadAccess": true, "electricity": true}
+```
+
+### Voice
+
+The audio goes through the same speech-to-text and translation as `/api/audio/transcribe`, then Gemini extracts the
+property fields from the English text. Optional form fields override what was spoken; send the device's GPS location
+as `latitude`/`longitude`, since sellers rarely speak coordinates.
+
+```bash
+curl -F file=@listing.mp3 -F inputLanguage=Hindi -F sellerContact="+91 98100 00002" \
+  -F latitude=18.8268 -F longitude=74.3741 http://localhost:8080/api/properties/voice
+# 201 -> {"transcription": {...}, "property": {...}}
+```
+
+If required details are missing, the response is **422** with the transcript, the extracted `draft` and the missing
+fields. Complete the draft and submit it to `POST /api/properties`:
+
+```json
+{"message": "The voice description is missing required property details",
+ "transcription": {"inputLanguage": "hi", "englishText": "I want to sell 5 acres of mango orchard ...", ...},
+ "draft": {"propertyType": "RURAL", "area": 5, "areaUnit": "ACRE", "price": null, ...},
+ "errors": [{"field": "price", "message": "must not be null"}]}
+```
+
+### Buyer search (RAG)
+
+```bash
+curl -H 'Content-Type: application/json' http://localhost:8080/api/properties/search -d '{
+  "query": "farm land with water near Pune under 50 lakh",
+  "propertyType": "RURAL", "maxPrice": 5000000,
+  "near": {"latitude": 18.52, "longitude": 73.86}, "radiusKm": 100, "topK": 5
+}'
+# -> {"query": "...", "answer": "Listing 9f2c... fits best: 5-acre irrigated orchard ...",
+#     "results": [{"property": {...}, "score": 0.81, "distanceKm": 58.3}]}
+```
+
+Only `query` is required. Sold listings are never returned. `answer` is null when no chat model is configured.
+Spoken search takes the same filters as form fields:
+
+```bash
+curl -F file=@request.mp3 -F inputLanguage=hi -F maxPrice=5000000 -F latitude=18.52 -F longitude=73.86 -F radiusKm=100 \
+  http://localhost:8080/api/properties/search/voice
+```
+
+### Purchase
+
+```bash
+curl -H 'Content-Type: application/json' -d '{"buyerName": "Neha Singh", "buyerContact": "neha@example.com"}' \
+  http://localhost:8080/api/properties/{id}/purchase
+# 201 -> {"id": "...", "propertyId": "...", "price": 9500000, "currency": "INR", "coordinates": {...},
+#         "sellerName": "Asha Verma", "buyerName": "Neha Singh", "purchasedAt": "..."}
+```
+
+The listing is marked `SOLD` atomically, so only one buyer can succeed; others get 409. The purchase is stored in the
+`purchases` collection and the listing is removed from the vector store.
+
+`PropertyMongoIT` covers listing, search and purchase against the Docker MongoDB without an API key:
+`LEARNAI_MONGODB_IT=true ./mvnw test -Dtest=PropertyMongoIT`.
+
 ## API
 
 ```bash

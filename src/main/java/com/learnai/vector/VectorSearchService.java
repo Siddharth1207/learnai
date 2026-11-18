@@ -30,6 +30,10 @@ public class VectorSearchService {
         this.vectorStore = vectorStore;
     }
 
+    public boolean isEnabled() {
+        return vectorStore.getIfAvailable() != null;
+    }
+
     public List<String> addTexts(List<TextEntry> entries) {
         List<Document> documents = entries.stream()
                 .map(entry -> new Document(entry.text(), entry.metadata() == null ? Map.of() : entry.metadata()))
