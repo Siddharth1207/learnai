@@ -136,12 +136,24 @@ RAG: the best listings are retrieved from MongoDB Atlas Vector Search and Gemini
 |----------|-------------|
 | `POST /api/properties` | Create a listing from the form (JSON below) |
 | `POST /api/properties/voice` | Create a listing from the seller's voice description (multipart) |
-| `GET /api/properties?propertyType=&status=` | List listings (`URBAN`/`RURAL`, `AVAILABLE`/`SOLD`) |
-| `GET /api/properties/{id}` | Get a listing |
+| `GET /api/properties?propertyType=&status=&listingType=` | List listings (`URBAN`/`RURAL`, `AVAILABLE`/`SOLD`, `SALE`/`RENT`) |
+| `GET /api/properties/{id}` | Get a listing (masked public view) |
 | `POST /api/properties/search` | Buyer search (RAG) with optional filters |
 | `POST /api/properties/search/voice` | Buyer search from a spoken request (multipart) |
-| `POST /api/properties/{id}/purchase` | Buy a listing at its listed price (409 if already sold) |
-| `GET /api/properties/{id}/purchase` | Get the purchase of a sold listing |
+| `POST /api/properties/{id}/purchase` | Buy or rent a listing at its listed price (409 if already taken) |
+| `GET /api/properties/{id}/purchase` | Get the purchase of a sold/rented listing |
+| `POST /api/properties/{id}/videos` | Upload an optional walkthrough video (multipart `file`) |
+| `POST /api/properties/{id}/services/CONTACT_UNLOCK` | Paid unlock of the full address and seller contact (₹199) |
+| `POST /api/properties/{id}/services/DOCUMENT_VERIFICATION` | Paid document verification report (₹499) |
+| `POST /api/properties/{id}/services/SITE_VISIT` | Paid site-visit booking (₹199) |
+
+The rent, video, privacy and paid-service contract is specified in
+[docs/property-services-api.md](docs/property-services-api.md). The same endpoints are stubbed in
+`learningaiui/wiremock/` so the Angular app can run without this service.
+
+Public listing responses mask the seller contact, street/postal address and rural survey number. Full values are only
+returned by a purchase or a paid `CONTACT_UNLOCK` order.
+
 
 Requirements: MongoDB (`docker compose up -d`) for all endpoints. Voice endpoints need `LEARNAI_CHAT_MODEL=google-genai`
 and `GEMINI_API_KEY` (503 otherwise). Search needs `LEARNAI_VECTOR_STORE=mongodb-atlas` (503 otherwise); listings created
@@ -157,7 +169,8 @@ curl -H 'Content-Type: application/json' http://localhost:8080/api/properties -d
   "address": {"street": "12 MG Road", "locality": "Koregaon Park", "city": "Pune", "state": "Maharashtra", "postalCode": "411001", "country": "India"},
   "coordinates": {"latitude": 18.5362, "longitude": 73.8940},
   "area": 1200, "areaUnit": "SQ_FT", "price": 9500000, "currency": "INR",
-  "urban": {"buildingType": "apartment", "bedrooms": 2, "bathrooms": 2, "floor": 5, "totalFloors": 12, "furnishing": "semi-furnished", "parking": true}
+  "listingType": "SALE",
+  "urban": {"buildingType": "apartment", "apartmentName": "Lotus Residency", "tower": "Tower B · Flat 504", "bedrooms": 2, "bathrooms": 2, "floor": 5, "totalFloors": 12, "furnishing": "semi-furnished", "parking": true, "amenities": "Lift, gym, covered parking"}
 }'
 ```
 
@@ -166,8 +179,11 @@ Required: `sellerName`, `sellerContact`, `propertyType`, `address.city`, `coordi
 and `title` to e.g. "Urban property in Pune". Use `urban` only for URBAN listings and `rural` only for RURAL ones:
 
 ```json
-"rural": {"landUse": "orchard", "soilType": "black", "waterSource": "borewell", "irrigated": true, "roadAccess": true, "electricity": true}
+"rural": {"landUse": "orchard", "surveyNumber": "Khasra 145/2", "ownershipType": "Freehold", "crop": "Grapes", "soilType": "black", "waterSource": "borewell", "irrigated": true, "roadAccess": true, "electricity": true}
 ```
+
+For rent, set `"listingType": "RENT"` and add `"deposit": 300000`; `price` is then the monthly rent.
+`listingType` defaults to `SALE`. The seller can pick coordinates on a map in the app, or send device GPS values.
 
 ### Voice
 
@@ -176,7 +192,7 @@ property fields from the English text. Optional form fields override what was sp
 as `latitude`/`longitude`, since sellers rarely speak coordinates.
 
 ```bash
-curl -F file=@listing.mp3 -F inputLanguage=Hindi -F sellerContact="+91 98100 00002" \
+curl -F file=@listing.mp3 -F inputLanguage=Hindi -F sellerContact="+91 98100 00002" -F listingType=RENT \
   -F latitude=18.8268 -F longitude=74.3741 http://localhost:8080/api/properties/voice
 # 201 -> {"transcription": {...}, "property": {...}}
 ```
@@ -196,7 +212,7 @@ fields. Complete the draft and submit it to `POST /api/properties`:
 ```bash
 curl -H 'Content-Type: application/json' http://localhost:8080/api/properties/search -d '{
   "query": "farm land with water near Pune under 50 lakh",
-  "propertyType": "RURAL", "maxPrice": 5000000,
+  "propertyType": "RURAL", "listingType": "SALE", "maxPrice": 5000000,
   "near": {"latitude": 18.52, "longitude": 73.86}, "radiusKm": 100, "topK": 5
 }'
 # -> {"query": "...", "answer": "Listing 9f2c... fits best: 5-acre irrigated orchard ...",
@@ -225,6 +241,42 @@ The listing is marked `SOLD` atomically, so only one buyer can succeed; others g
 
 `PropertyMongoIT` covers listing, search and purchase against the Docker MongoDB without an API key:
 `LEARNAI_MONGODB_IT=true ./mvnw test -Dtest=PropertyMongoIT`.
+
+### Walkthrough videos
+
+```bash
+curl -F file=@walkthrough.mp4 http://localhost:8080/api/properties/{id}/videos
+# 201 -> {"id": "...", "url": "/api/properties/{id}/videos/...", "contentType": "video/mp4", ...}
+# Stream it (HTTP Range works, so <video> can seek):
+curl -o clip.mp4 http://localhost:8080/api/properties/{id}/videos/{videoId}
+```
+
+MP4, MOV and WebM up to 50 MB are accepted (`415`/`413` otherwise). Files are stored under
+`learnai.videos.dir` (default `videos`, env `LEARNAI_VIDEOS_DIR`) and the metadata on the listing.
+
+### Paid services
+
+No payment provider is configured, so orders are recorded as `PAID` immediately. A paid service requires the
+listing to be `AVAILABLE` (409 otherwise).
+
+```bash
+# Full address and seller contact (₹199)
+curl -H 'Content-Type: application/json' -d '{"buyerName": "Neha Singh", "buyerContact": "neha@example.com"}' \
+  http://localhost:8080/api/properties/{id}/services/CONTACT_UNLOCK
+
+# Document-verification report (₹499)
+curl -H 'Content-Type: application/json' -d '{"buyerName": "Neha Singh", "buyerContact": "neha@example.com"}' \
+  http://localhost:8080/api/properties/{id}/services/DOCUMENT_VERIFICATION
+
+# Site visit (₹199); date and time are IST and must be in the future
+curl -H 'Content-Type: application/json' \
+  -d '{"buyerName": "Neha Singh", "buyerContact": "neha@example.com", "preferredDate": "2026-11-25", "preferredTime": "15:30"}' \
+  http://localhost:8080/api/properties/{id}/services/SITE_VISIT
+```
+
+Orders are stored in `property_service_orders`. `CONTACT_UNLOCK` returns `sellerContact` and `fullAddress`,
+`DOCUMENT_VERIFICATION` returns a `verification` report and `SITE_VISIT` returns a `meeting` with
+`scheduledAt` in IST.
 
 ## API
 

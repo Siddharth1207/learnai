@@ -21,6 +21,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
@@ -116,12 +117,23 @@ public class PropertyService {
     }
 
     public List<Property> list(PropertyType type, PropertyStatus status) {
+        return list(type, status, null);
+    }
+
+    public List<Property> list(PropertyType type, PropertyStatus status, ListingType listingType) {
         Query query = new Query().with(Sort.by(Sort.Direction.DESC, Property.CREATED_AT));
         if (type != null) {
             query.addCriteria(where(Property.PROPERTY_TYPE).is(type));
         }
         if (status != null) {
             query.addCriteria(where(Property.STATUS).is(status));
+        }
+        if (listingType != null) {
+            // Listings created before rent existed have no listingType field and count as SALE.
+            query.addCriteria(listingType == ListingType.SALE
+                    ? new Criteria().orOperator(where(Property.LISTING_TYPE).is(ListingType.SALE),
+                            where(Property.LISTING_TYPE).is(null))
+                    : where(Property.LISTING_TYPE).is(listingType));
         }
         return mongoTemplate.find(query, Property.class);
     }
@@ -224,7 +236,8 @@ public class PropertyService {
         try {
             Map<String, Object> metadata = Map.of(CATEGORY_METADATA, category(property.details().propertyType()),
                     PROPERTY_ID_METADATA, property.id());
-            return vectorSearch.addTexts(List.of(new TextEntry(PropertyText.describe(property.details()), metadata)))
+            // Index the masked text so the RAG answer cannot reveal the exact address or survey number.
+            return vectorSearch.addTexts(List.of(new TextEntry(PropertyText.describe(property.details().masked()), metadata)))
                     .get(0);
         }
         catch (RuntimeException e) {
@@ -260,9 +273,15 @@ public class PropertyService {
         PropertyDetails d = match.property().details();
         return match.property().status() == PropertyStatus.AVAILABLE
                 && (search.propertyType() == null || d.propertyType() == search.propertyType())
+                && (search.listingType() == null || listingType(d) == search.listingType())
                 && (search.minPrice() == null || d.price().compareTo(search.minPrice()) >= 0)
                 && (search.maxPrice() == null || d.price().compareTo(search.maxPrice()) <= 0)
                 && (search.radiusKm() == null || match.distanceKm() <= search.radiusKm());
+    }
+
+    /** Listings created before rent existed have no listing type and are for sale. */
+    static ListingType listingType(PropertyDetails details) {
+        return details.listingType() == null ? ListingType.SALE : details.listingType();
     }
 
     /** Uses the {@code category} metadata field, which is filterable in the default vector index. */

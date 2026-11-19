@@ -15,20 +15,30 @@ final class PropertyText {
     static String describe(PropertyDetails d) {
         List<String> lines = new ArrayList<>();
         lines.add(d.title());
-        lines.add("%s property for sale at %s %s.".formatted(d.propertyType(), d.price().toPlainString(), d.currency()));
+        if (d.listingType() == ListingType.RENT) {
+            lines.add("RENT property for %s %s per month%s.".formatted(d.price().toPlainString(), d.currency(),
+                    d.deposit() == null ? "" : ", security deposit " + d.deposit().toPlainString() + " " + d.currency()));
+        }
+        else {
+            lines.add("SALE property for %s %s.".formatted(d.price().toPlainString(), d.currency()));
+        }
         lines.add("Area: %s %s.".formatted(d.area().toPlainString(), d.areaUnit()));
         lines.add("Location: " + join(d.address().street(), d.address().locality(), d.address().city(),
                 d.address().district(), d.address().state(), d.address().postalCode(), d.address().country()) + ".");
         lines.add("Coordinates: %s, %s.".formatted(d.coordinates().latitude(), d.coordinates().longitude()));
         UrbanDetails u = d.urban();
         if (u != null) {
-            lines.add("Details: " + join(u.buildingType(), count(u.bedrooms(), "bedroom"), count(u.bathrooms(), "bathroom"),
+            lines.add("Details: " + join(u.buildingType(), u.apartmentName(), u.tower(),
+                    count(u.bedrooms(), "bedroom"), count(u.bathrooms(), "bathroom"),
                     u.floor() == null ? null : "floor " + u.floor() + (u.totalFloors() == null ? "" : " of " + u.totalFloors()),
-                    u.furnishing(), flag(u.parking(), "parking")) + ".");
+                    u.furnishing(), flag(u.parking(), "parking"),
+                    u.amenities() == null ? null : "amenities: " + u.amenities()) + ".");
         }
         RuralDetails r = d.rural();
         if (r != null) {
-            lines.add("Details: " + join(r.landUse() == null ? null : r.landUse() + " land",
+            lines.add("Details: " + join(r.landUse() == null ? null : r.landUse() + " land", r.surveyNumber(),
+                    r.ownershipType() == null ? null : r.ownershipType() + " ownership",
+                    r.crop() == null ? null : "crop " + r.crop(),
                     r.soilType() == null ? null : r.soilType() + " soil",
                     r.waterSource() == null ? null : "water from " + r.waterSource(), flag(r.irrigated(), "irrigated"),
                     flag(r.roadAccess(), "road access"), flag(r.electricity(), "electricity")) + ".");

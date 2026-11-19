@@ -25,9 +25,16 @@ public record PropertySearch(
         @Positive BigDecimal maxPrice,
         @Valid Coordinates near,
         @Positive Double radiusKm,
-        @Min(1) @Max(20) Integer topK) {
+        @Min(1) @Max(20) Integer topK,
+        ListingType listingType) {
 
     static final int DEFAULT_TOP_K = 5;
+
+    /** Keeps older callers that predate the rent filter. */
+    public PropertySearch(String query, PropertyType propertyType, BigDecimal minPrice, BigDecimal maxPrice,
+            Coordinates near, Double radiusKm, Integer topK) {
+        this(query, propertyType, minPrice, maxPrice, near, radiusKm, topK, null);
+    }
 
     @JsonIgnore
     @AssertTrue(message = "radiusKm requires near coordinates")
@@ -36,7 +43,7 @@ public record PropertySearch(
     }
 
     PropertySearch withQuery(String newQuery) {
-        return new PropertySearch(newQuery, propertyType, minPrice, maxPrice, near, radiusKm, topK);
+        return new PropertySearch(newQuery, propertyType, minPrice, maxPrice, near, radiusKm, topK, listingType);
     }
 
     int limit() {

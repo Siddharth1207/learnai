@@ -241,6 +241,47 @@ class PropertyServiceTest {
                 .isInstanceOf(PropertyNotFoundException.class);
     }
 
+    @Test
+    void searchFiltersRentListings() {
+        Property sale = saved("sale", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
+        Property rent = saved("rent", PropertyFixtures.urbanRent(), PropertyStatus.AVAILABLE);
+        when(vectorSearch.search(eq("flat"), anyInt(), eq(0.0), eq(PropertyService.categoryFilter(null))))
+                .thenReturn(List.of(hit("sale", 0.9), hit("rent", 0.8)));
+        when(properties.findAllById(any())).thenReturn(List.of(sale, rent));
+
+        PropertySearchResult result = service.search(new PropertySearch("flat", null, null, null, null, null, null,
+                ListingType.RENT));
+
+        assertThat(result.results()).extracting(m -> m.property().id()).containsExactly("rent");
+    }
+
+    @Test
+    void listFiltersByListingType() {
+        when(mongoTemplate.find(any(Query.class), eq(Property.class))).thenReturn(List.of());
+
+        service.list(null, null, ListingType.RENT);
+
+        ArgumentCaptor<Query> query = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).find(query.capture(), eq(Property.class));
+        assertThat(query.getValue().getQueryObject()).containsEntry("details.listingType", ListingType.RENT);
+    }
+
+    @Test
+    void publicViewMasksContactAddressAndSurveyNumber() {
+        Property masked = saved("farm", PropertyFixtures.ruralFarm(), PropertyStatus.AVAILABLE).publicView();
+
+        assertThat(masked.details().sellerContact()).isEqualTo("+91 ••••• 00002");
+        assertThat(masked.details().address().street()).isNull();
+        assertThat(masked.details().address().postalCode()).isNull();
+        assertThat(masked.details().address().locality()).isEqualTo("Wagholi village");
+        assertThat(masked.details().rural().surveyNumber()).isNull();
+        assertThat(masked.details().rural().crop()).isEqualTo("Mango");
+
+        Property full = saved("flat", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
+        assertThat(full.details().sellerContact()).isEqualTo("+91 98100 00001");
+        assertThat(full.publicView().details().sellerContact()).isEqualTo("+91 ••••• 00001");
+    }
+
     private static PropertyDetails overrides(Coordinates coordinates) {
         return new PropertyDetails(null, null, null, null, null, null, coordinates, null, null, null, null, null, null);
     }

@@ -12,7 +12,20 @@ final class PropertyFixtures {
                 "Sunny flat near the metro station with a balcony",
                 new Address("12 MG Road", "Koregaon Park", "Pune", "Pune", "Maharashtra", "411001", "India"),
                 new Coordinates(18.5362, 73.8940), new BigDecimal("1200"), AreaUnit.SQ_FT, new BigDecimal("9500000"),
-                null, new UrbanDetails("apartment", 2, 2, 5, 12, "semi-furnished", true), null);
+                null, new UrbanDetails("apartment", "Lotus Residency", "Tower B · Flat 504", 2, 2, 5, 12,
+                        "semi-furnished", true, "Lift, gym, covered parking"),
+                null);
+    }
+
+    static PropertyDetails urbanRent() {
+        return new PropertyDetails("Asha Verma", "+91 98100 00001", PropertyType.URBAN, "2BHK for rent",
+                "Furnished flat near the metro station",
+                new Address("12 MG Road", "Koregaon Park", "Pune", "Pune", "Maharashtra", "411001", "India"),
+                new Coordinates(18.5362, 73.8940), new BigDecimal("1200"), AreaUnit.SQ_FT, new BigDecimal("35000"),
+                "INR", ListingType.RENT, new BigDecimal("100000"),
+                new UrbanDetails("apartment", "Lotus Residency", "Tower B · Flat 504", 2, 2, 5, 12,
+                        "furnished", true, "Lift, gym"),
+                null);
     }
 
     static PropertyDetails ruralFarm() {
@@ -20,6 +33,7 @@ final class PropertyFixtures {
                 "Fertile farm land with mango trees and a farmhouse",
                 new Address(null, "Wagholi village", "Shirur", "Pune", "Maharashtra", null, "India"),
                 new Coordinates(18.8268, 74.3741), new BigDecimal("5"), AreaUnit.ACRE, new BigDecimal("4000000"), "inr",
-                null, new RuralDetails("orchard", "black", "borewell", true, true, true));
+                null, new RuralDetails("orchard", "Khasra 145/2", "Freehold", "Mango", "black", "borewell", true,
+                        true, true));
     }
 }
