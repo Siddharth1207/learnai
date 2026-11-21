@@ -15,6 +15,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param fullAddress full street address returned only for {@link PaidServiceCode#CONTACT_UNLOCK}
  * @param verification verification result returned only for {@link PaidServiceCode#DOCUMENT_VERIFICATION}
  * @param meeting booked slot returned only for {@link PaidServiceCode#SITE_VISIT}
+ * @param locationInsights web-researched location report returned only for {@link PaidServiceCode#LOCATION_INSIGHTS}
  */
 @Document("property_service_orders")
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -31,5 +32,14 @@ public record PaidServiceOrder(
         String sellerContact,
         Address fullAddress,
         VerificationReport verification,
-        MeetingDetails meeting) {
+        MeetingDetails meeting,
+        LocationInsights locationInsights) {
+
+    /** Keeps older callers that predate location insights. */
+    public PaidServiceOrder(String id, String propertyId, PaidServiceCode service, BigDecimal amount, String currency,
+            ServiceStatus status, Instant purchasedAt, String buyerName, String buyerContact, String sellerContact,
+            Address fullAddress, VerificationReport verification, MeetingDetails meeting) {
+        this(id, propertyId, service, amount, currency, status, purchasedAt, buyerName, buyerContact, sellerContact,
+                fullAddress, verification, meeting, null);
+    }
 }

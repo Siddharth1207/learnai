@@ -11,10 +11,15 @@ import static org.mockito.Mockito.when;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
+
+import com.learnai.research.LocationResearchService;
+import com.learnai.research.ResearchNotConfiguredException;
+import com.learnai.research.WebSource;
 
 class PropertyServiceOrdersTest {
 
@@ -22,7 +27,8 @@ class PropertyServiceOrdersTest {
 
     private final PropertyRepository properties = mock(PropertyRepository.class);
     private final ServiceOrderRepository orders = mock(ServiceOrderRepository.class);
-    private final PropertyServiceOrders service = new PropertyServiceOrders(properties, orders,
+    private final LocationResearchService research = mock(LocationResearchService.class);
+    private final PropertyServiceOrders service = new PropertyServiceOrders(properties, orders, research,
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     PropertyServiceOrdersTest() {
@@ -106,5 +112,39 @@ class PropertyServiceOrdersTest {
         assertThatThrownBy(() -> service.order("missing", PaidServiceCode.CONTACT_UNLOCK,
                 new PaidServiceRequest("Neha", "neha@example.com", null, null)))
                 .isInstanceOf(PropertyNotFoundException.class);
+    }
+
+    @Test
+    void locationInsightsReturnsTheLiveResearchReport() {
+        LocationInsights insights = new LocationInsights("Koregaon Park, Pune, Maharashtra, India", NOW,
+                LocationRecommendation.BUY, 78, "Metro line 3 is approved and should lift demand.",
+                List.of(new LocationKpi("transport", "Transport and connectivity", KpiImpact.POSITIVE,
+                        "Pune Metro line 3 approved near the locality.",
+                        List.of(new WebSource("Metro line 3 approved", "https://pune.gov.in/metro-3",
+                                "Pune Metro line 3 approved for Koregaon Park.", "2026-11-01")))),
+                List.of());
+        when(research.research(any(Property.class))).thenReturn(insights);
+
+        PaidServiceOrder order = service.order("p1", PaidServiceCode.LOCATION_INSIGHTS,
+                new PaidServiceRequest("Neha Singh", "neha@example.com", null, null));
+
+        assertThat(order.service()).isEqualTo(PaidServiceCode.LOCATION_INSIGHTS);
+        assertThat(order.amount()).isEqualByComparingTo("799");
+        assertThat(order.locationInsights()).isEqualTo(insights);
+        assertThat(order.locationInsights().recommendation()).isEqualTo(LocationRecommendation.BUY);
+        assertThat(order.sellerContact()).isNull();
+        assertThat(order.verification()).isNull();
+        verify(research).research(any(Property.class));
+    }
+
+    @Test
+    void locationInsightsWithoutASearchKeyFailsWithoutCharging() {
+        when(research.research(any(Property.class)))
+                .thenThrow(new ResearchNotConfiguredException("Set TAVILY_API_KEY"));
+
+        assertThatThrownBy(() -> service.order("p1", PaidServiceCode.LOCATION_INSIGHTS,
+                new PaidServiceRequest("Neha Singh", "neha@example.com", null, null)))
+                .isInstanceOf(ResearchNotConfiguredException.class);
+        verify(orders, never()).save(any());
     }
 }

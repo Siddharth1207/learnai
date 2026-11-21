@@ -18,7 +18,7 @@ problem responses (`404` unknown listing, `409` unavailable, `422` incomplete vo
 | Rural fields | `rural.surveyNumber`, `rural.ownershipType`, `rural.crop` |
 | Video | Optional walkthrough video per listing, uploaded after creation |
 | Privacy | Public listing responses mask contact details, full street address and survey number |
-| Paid services | Contact/address unlock, document verification and site-visit booking |
+| Paid services | Contact/address unlock, document verification, site-visit booking and a live location-research report |
 | Map | Coordinates already exist; the app now lets the seller pick them on a map instead of relying only on GPS |
 | Search | MongoDB-first matching plus optional vector (≥ 0.9), semantic cache (≥ 0.9, 1 h TTL) and `marketResearch` in the response |
 
@@ -35,6 +35,7 @@ problem responses (`404` unknown listing, `409` unavailable, `422` incomplete vo
 | `POST` | `/api/properties/{id}/services/CONTACT_UNLOCK` | Paid unlock of full address and seller contact |
 | `POST` | `/api/properties/{id}/services/DOCUMENT_VERIFICATION` | Paid title/survey/ownership verification |
 | `POST` | `/api/properties/{id}/services/SITE_VISIT` | Paid site-visit booking (date + time required) |
+| `POST` | `/api/properties/{id}/services/LOCATION_INSIGHTS` | Paid real-time web research with a buy/rent/hold recommendation |
 
 Purchases (`POST /{id}/purchase`) keep their current behaviour. A `RENT` listing is still
 purchase/booking-like: the buyer commits at the listed monthly rent; `409` when already taken.
@@ -193,7 +194,7 @@ Only the seller (authenticated owner) may upload; anonymous uploads must not be 
 ## Paid services
 
 `POST /api/properties/{id}/services/{code}` where `code` is `CONTACT_UNLOCK`,
-`DOCUMENT_VERIFICATION` or `SITE_VISIT`.
+`DOCUMENT_VERIFICATION`, `SITE_VISIT` or `LOCATION_INSIGHTS`.
 
 Request:
 
@@ -261,6 +262,52 @@ storage/signing provider exists):
 ```
 
 `mode` is `ON_SITE` or `VIDEO_CALL`. Confirm the slot with the seller before marking it scheduled.
+
+`LOCATION_INSIGHTS` (₹799) runs live web searches (Tavily) for the listing's locality at order time and returns:
+
+```json
+"locationInsights": {
+  "location": "Koregaon Park, Pune, Maharashtra, India",
+  "generatedAt": "2026-11-21T16:20:00Z",
+  "recommendation": "BUY",
+  "suitabilityScore": 86,
+  "summary": "Suitability score 86/100, verdict BUY ...",
+  "kpis": [
+    {
+      "key": "transport",
+      "label": "Transport and connectivity",
+      "impact": "POSITIVE",
+      "summary": "Pune Metro line 3 is approved with a station near the locality.",
+      "sources": [
+        {
+          "title": "Metro line 3 approved",
+          "url": "https://pune.gov.in/...",
+          "snippet": "…",
+          "publishedDate": "2026-11-01"
+        }
+      ]
+    }
+  ],
+  "sources": [
+    { "title": "Metro line 3 approved", "url": "https://pune.gov.in/...", "publishedDate": "2026-11-01" }
+  ]
+}
+```
+
+- KPI keys (weights in brackets): `transport` [3], `roads` [2], `water` [2], `power` [1], `education` [1],
+  `healthcare` [1], `construction` [2], `governance` [3]. Each KPI runs one general query plus, for `transport`,
+  `roads`, `water` and `governance`, one query restricted to `gov.in`/`nic.in`.
+- `impact` is `POSITIVE`, `NEUTRAL`, `NEGATIVE` or `UNCERTAIN`. The score starts at 50, adds 3×weight per positive KPI
+  and subtracts 4×weight per negative KPI, clamped to 5–95.
+- `recommendation` is `BUY` for a `SALE` listing at score ≥ 65, `RENT` for a `RENT` listing at score ≥ 55, otherwise
+  `HOLD`. A negative `roads` or `governance` KPI (acquisition, widening, stay order) always forces `HOLD`.
+- Requires `TAVILY_API_KEY`; without it the endpoint answers `503` and no order is saved (buyers are not charged for a
+  report that could not be produced). Tavily's free tier allows 1000 basic searches/month; one report uses up to 12.
+- Gemini (`GEMINI_API_KEY`) rewrites the KPI and overall summaries. Without Gemini the report still returns the
+  sources, a snippet-based KPI summary and the rule-based verdict.
+- Snippets can be outdated or about a different project with a similar name. Show the sources and the
+  "research, not investment advice" note, and never present a distance or date the sources do not state.
+- Listing portals (MagicBricks, 99acres, Housing, NoBroker, OLX, …) are filtered out of the sources.
 Orders are stored in the `property_service_orders` collection with buyer, property, service, amount,
 status and timestamps; add a payment reference and idempotency key when a gateway is wired in.
 

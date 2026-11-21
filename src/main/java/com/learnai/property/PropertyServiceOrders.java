@@ -15,6 +15,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.learnai.research.LocationResearchService;
+
 /**
  * Checkout for the paid services on a listing. There is no payment provider configured yet, so orders are
  * recorded as {@link ServiceStatus#PAID} directly — wiring a gateway means charging before the order is saved.
@@ -27,16 +29,20 @@ public class PropertyServiceOrders {
 
     private final PropertyRepository properties;
     private final ServiceOrderRepository orders;
+    private final LocationResearchService research;
     private final Clock clock;
 
     @Autowired
-    public PropertyServiceOrders(PropertyRepository properties, ServiceOrderRepository orders) {
-        this(properties, orders, Clock.systemUTC());
+    public PropertyServiceOrders(PropertyRepository properties, ServiceOrderRepository orders,
+            LocationResearchService research) {
+        this(properties, orders, research, Clock.systemUTC());
     }
 
-    PropertyServiceOrders(PropertyRepository properties, ServiceOrderRepository orders, Clock clock) {
+    PropertyServiceOrders(PropertyRepository properties, ServiceOrderRepository orders, LocationResearchService research,
+            Clock clock) {
         this.properties = properties;
         this.orders = orders;
+        this.research = research;
         this.clock = clock;
     }
 
@@ -60,6 +66,7 @@ public class PropertyServiceOrders {
         Address fullAddress = null;
         VerificationReport verification = null;
         MeetingDetails meeting = null;
+        LocationInsights locationInsights = null;
 
         switch (code) {
             case CONTACT_UNLOCK -> {
@@ -70,11 +77,13 @@ public class PropertyServiceOrders {
                     "Title deed, ownership record and tax receipts match the seller name. No encumbrance found.", now,
                     null);
             case SITE_VISIT -> meeting = meeting(details, request, now);
+            // Runs the live web searches before the order is saved, so a missing TAVILY_API_KEY fails the order.
+            case LOCATION_INSIGHTS -> locationInsights = research.research(property);
         }
 
         PaidServiceOrder order = new PaidServiceOrder(UUID.randomUUID().toString(), propertyId, code, amount,
                 details.currency(), ServiceStatus.PAID, now, request.buyerName().trim(), request.buyerContact().trim(),
-                sellerContact, fullAddress, verification, meeting);
+                sellerContact, fullAddress, verification, meeting, locationInsights);
         return orders.save(order);
     }
 

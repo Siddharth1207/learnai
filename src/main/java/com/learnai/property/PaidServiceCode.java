@@ -9,8 +9,13 @@ public enum PaidServiceCode {
     CONTACT_UNLOCK(new BigDecimal("199")),
     /** Orders a title/document verification report. */
     DOCUMENT_VERIFICATION(new BigDecimal("499")),
-    /** Books a site visit (requires {@code preferredDate} and {@code preferredTime}). */
-    SITE_VISIT(new BigDecimal("199"));
+    /** Orders a site visit (requires {@code preferredDate} and {@code preferredTime}). */
+    SITE_VISIT(new BigDecimal("199")),
+    /**
+     * Real-time internet research around the listing (gov projects, infrastructure, planning risks) with a
+     * buy/rent/hold recommendation. Requires {@code TAVILY_API_KEY}; answers 503 without it.
+     */
+    LOCATION_INSIGHTS(new BigDecimal("799"));
 
     private final BigDecimal amount;
 

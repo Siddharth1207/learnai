@@ -149,6 +149,7 @@ served from a semantic cache (MongoDB, cosine similarity ≥ 0.9) and never reac
 | `POST /api/properties/{id}/services/CONTACT_UNLOCK` | Paid unlock of the full address and seller contact (₹199) |
 | `POST /api/properties/{id}/services/DOCUMENT_VERIFICATION` | Paid document verification report (₹499) |
 | `POST /api/properties/{id}/services/SITE_VISIT` | Paid site-visit booking (₹199) |
+| `POST /api/properties/{id}/services/LOCATION_INSIGHTS` | Paid real-time internet research with a buy/rent/hold recommendation (₹799, needs `TAVILY_API_KEY`) |
 
 The rent, video, privacy and paid-service contract is specified in
 [docs/property-services-api.md](docs/property-services-api.md). The same endpoints are stubbed in
@@ -162,7 +163,9 @@ Requirements: MongoDB (`docker compose up -d`) for all endpoints. Voice endpoint
 and `GEMINI_API_KEY` (503 otherwise). Search works with MongoDB alone; `LEARNAI_VECTOR_STORE=mongodb-atlas` adds
 semantic matches and `GEMINI_API_KEY` adds the answer, market summary and embedding-based cache reuse. Listings
 created while the vector store is disabled are saved and searchable from MongoDB (`vectorDocumentId: null`). The
-default `LEARNAI_VECTOR_FILTER_FIELDS` (`source,category`) is enough; no index change is needed.
+default `LEARNAI_VECTOR_FILTER_FIELDS` (`source,category`) is enough; no index change is needed. The paid
+`LOCATION_INSIGHTS` report needs `TAVILY_API_KEY` (free tier at [tavily.com](https://tavily.com)) and answers `503`
+without it; Gemini only rewrites the summaries, the verdict also works without it.
 
 ### Form
 
@@ -308,11 +311,41 @@ curl -H 'Content-Type: application/json' -d '{"buyerName": "Neha Singh", "buyerC
 curl -H 'Content-Type: application/json' \
   -d '{"buyerName": "Neha Singh", "buyerContact": "neha@example.com", "preferredDate": "2026-11-25", "preferredTime": "15:30"}' \
   http://localhost:8080/api/properties/{id}/services/SITE_VISIT
+
+# Real-time location research (₹799, needs TAVILY_API_KEY; 503 without it)
+curl -H 'Content-Type: application/json' -d '{"buyerName": "Neha Singh", "buyerContact": "neha@example.com"}' \
+  http://localhost:8080/api/properties/{id}/services/LOCATION_INSIGHTS
 ```
 
 Orders are stored in `property_service_orders`. `CONTACT_UNLOCK` returns `sellerContact` and `fullAddress`,
 `DOCUMENT_VERIFICATION` returns a `verification` report and `SITE_VISIT` returns a `meeting` with
 `scheduledAt` in IST.
+
+`LOCATION_INSIGHTS` searches the live web (Tavily, including `gov.in`/`nic.in` for transport, roads, water and
+planning) for eight KPIs around the locality — upcoming metro/railway/bus-stand projects, road widening, water and
+sanitation, power upgrades, schools, hospitals, new construction and price trends, RERA/permissions — and returns
+`locationInsights`:
+
+```json
+"locationInsights": {
+  "location": "Koregaon Park, Pune, Maharashtra, India",
+  "generatedAt": "2026-11-21T16:20:00Z",
+  "recommendation": "BUY",
+  "suitabilityScore": 86,
+  "summary": "Suitability score 86/100, verdict BUY ...",
+  "kpis": [
+    {"key": "transport", "label": "Transport and connectivity", "impact": "POSITIVE",
+     "summary": "Pune Metro line 3 is approved with a station near the locality.",
+     "sources": [{"title": "Metro line 3 approved", "url": "https://pune.gov.in/...", "publishedDate": "2026-11-01"}]}
+  ],
+  "sources": [{"title": "Metro line 3 approved", "url": "https://pune.gov.in/..."}]
+}
+```
+
+Each report is executed at order time (no cached report); the verdict is rule-based (risks such as land acquisition or
+a stay order force `HOLD`, otherwise the weighted KPI score decides `BUY`/`RENT`/`HOLD` for the listing type) and
+Gemini writes the KPI and overall narratives. Search snippets are a research aid: confirm approvals, distances and
+project timelines with the municipal corporation or RERA before paying a token amount.
 
 ## API
 

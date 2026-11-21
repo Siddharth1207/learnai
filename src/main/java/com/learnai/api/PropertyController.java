@@ -191,7 +191,10 @@ public class PropertyController {
                 .body(new ByteArrayResource(bytes));
     }
 
-    /** Orders a paid service: CONTACT_UNLOCK, DOCUMENT_VERIFICATION or SITE_VISIT. */
+    /**
+     * Orders a paid service: CONTACT_UNLOCK, DOCUMENT_VERIFICATION, SITE_VISIT or LOCATION_INSIGHTS (real-time web
+     * research with a buy/rent/hold recommendation; 503 until TAVILY_API_KEY is set).
+     */
     @PostMapping(path = "/{id}/services/{code}", consumes = MediaType.APPLICATION_JSON_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     public PaidServiceOrder orderService(@PathVariable String id, @PathVariable PaidServiceCode code,
