@@ -20,6 +20,7 @@ problem responses (`404` unknown listing, `409` unavailable, `422` incomplete vo
 | Privacy | Public listing responses mask contact details, full street address and survey number |
 | Paid services | Contact/address unlock, document verification and site-visit booking |
 | Map | Coordinates already exist; the app now lets the seller pick them on a map instead of relying only on GPS |
+| Search | MongoDB-first matching plus optional vector (≥ 0.9), semantic cache (≥ 0.9, 1 h TTL) and `marketResearch` in the response |
 
 ## Endpoints
 
@@ -37,6 +38,53 @@ problem responses (`404` unknown listing, `409` unavailable, `422` incomplete vo
 
 Purchases (`POST /{id}/purchase`) keep their current behaviour. A `RENT` listing is still
 purchase/booking-like: the buyer commits at the listed monthly rent; `409` when already taken.
+
+## Buyer search (MongoDB first, LLM only for new requests)
+
+`POST /api/properties/search` and `/api/properties/search/voice` keep their request bodies. The response gains one
+additive field, `marketResearch` (clients that ignore unknown fields need no change):
+
+```json
+{
+  "query": "farm land with water near Pune under 50 lakh",
+  "answer": "Listing 9f2c... fits best: ...",
+  "results": [{ "property": { "id": "rural-sale-3", "...": "..." }, "score": 0.81, "distanceKm": 58.3 }],
+  "marketResearch": {
+    "listingCount": 4,
+    "averagePrice": 5200000,
+    "medianPrice": 4800000,
+    "minPrice": 3500000,
+    "maxPrice": 7500000,
+    "averagePricePerSqFt": 42.5,
+    "averageDeposit": null,
+    "listingsByCity": { "Pune": 3, "Nashik": 1 },
+    "aiSummary": "Farms near Pune average about 52 lakh..."
+  }
+}
+```
+
+- `averageDeposit` is present only for `RENT` searches; `averagePricePerSqFt` is null when no listing has an area.
+- `aiSummary` is null when no chat model is configured (`answer` is null in the same case). Statistics are still
+  returned because they come from MongoDB.
+
+Pipeline for every search:
+
+1. **Semantic cache** (`property_search_cache`): reused when the hard filters match, the entry is younger than
+   `learnai.search-cache.ttl` (1 h) and the query embeddings have cosine similarity ≥
+   `learnai.search-cache.similarity-threshold` (0.9). A hit returns the cached `answer`, `results` and
+   `marketResearch`; the transcription is never cached. Without an embedding model only exact query text hits.
+2. **MongoDB**: `status=AVAILABLE` and the filters (`propertyType`, `listingType`, `minPrice`, `maxPrice`,
+   `radiusKm`/`near`) are applied in the query; listings are ranked by the share of the buyer's words found in the
+   stored text (title, description, city, urban/rural details). The newest filtered listings are used when no
+   keyword matches.
+3. **Vector (optional)**: when the vector store is enabled, listings with similarity ≥
+   `learnai.vector.search-threshold` (0.9) are merged in; vector failures are logged and ignored.
+4. **LLM (optional)**: Gemini writes `answer` from the masked listing text and `aiSummary` from the aggregates.
+   Both are produced only on a cache miss, then stored in the cache.
+
+Creating a listing or marking one sold bumps the corpus version in `property_search_state`, which invalidates all
+cached searches. Listings are saved in MongoDB before vector indexing; `LEARNAI_VECTOR_INDEX_ON_CREATE=false` skips
+indexing without affecting search.
 
 ## Create / listing body
 

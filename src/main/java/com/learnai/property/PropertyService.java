@@ -5,11 +5,15 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -17,6 +21,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
@@ -39,9 +44,10 @@ import com.learnai.vector.VectorSearchService.TextEntry;
 import jakarta.validation.Validator;
 
 /**
- * Seller listings (form or voice), RAG search for buyers and purchases.
- * Listings are stored in MongoDB and their text is embedded in the vector store with {@code category=property-urban}
- * or {@code property-rural}, so buyers can search them semantically.
+ * Seller listings (form or voice), buyer search and purchases.
+ * Listings are always stored in MongoDB first. The vector store and the LLM are optional enhancements: listings are
+ * also embedded there ({@code category=property-urban} or {@code property-rural}) when the vector store is enabled,
+ * so a buyer's wording can be matched semantically on top of the MongoDB filters and keyword search.
  */
 @Service
 public class PropertyService {
@@ -61,20 +67,28 @@ public class PropertyService {
     private final AudioTranscriptionService transcription;
     private final PropertyExtractor extractor;
     private final PropertyAnswerGenerator answerGenerator;
+    private final PropertyCatalog catalog;
+    private final PropertySearchCache searchCache;
     private final Validator validator;
     private final Clock clock;
+    private final double vectorSearchThreshold;
+    private final boolean indexOnCreate;
 
     @Autowired
     public PropertyService(PropertyRepository properties, PurchaseRepository purchases, MongoTemplate mongoTemplate,
             VectorSearchService vectorSearch, AudioTranscriptionService transcription, PropertyExtractor extractor,
-            PropertyAnswerGenerator answerGenerator, Validator validator) {
+            PropertyAnswerGenerator answerGenerator, Validator validator, PropertyCatalog catalog,
+            PropertySearchCache searchCache,
+            @Value("${learnai.vector.search-threshold:0.9}") double vectorSearchThreshold,
+            @Value("${learnai.vector.index-on-create:true}") boolean indexOnCreate) {
         this(properties, purchases, mongoTemplate, vectorSearch, transcription, extractor, answerGenerator, validator,
-                Clock.systemUTC());
+                catalog, searchCache, Clock.systemUTC(), vectorSearchThreshold, indexOnCreate);
     }
 
     PropertyService(PropertyRepository properties, PurchaseRepository purchases, MongoTemplate mongoTemplate,
             VectorSearchService vectorSearch, AudioTranscriptionService transcription, PropertyExtractor extractor,
-            PropertyAnswerGenerator answerGenerator, Validator validator, Clock clock) {
+            PropertyAnswerGenerator answerGenerator, Validator validator, PropertyCatalog catalog,
+            PropertySearchCache searchCache, Clock clock, double vectorSearchThreshold, boolean indexOnCreate) {
         this.properties = properties;
         this.purchases = purchases;
         this.mongoTemplate = mongoTemplate;
@@ -82,8 +96,12 @@ public class PropertyService {
         this.transcription = transcription;
         this.extractor = extractor;
         this.answerGenerator = answerGenerator;
+        this.catalog = catalog;
+        this.searchCache = searchCache;
         this.validator = validator;
         this.clock = clock;
+        this.vectorSearchThreshold = vectorSearchThreshold;
+        this.indexOnCreate = indexOnCreate;
     }
 
     /** Creates a listing from the form. {@code details} must already be valid. */
@@ -156,27 +174,85 @@ public class PropertyService {
         return search(filters.withQuery(transcript.englishText()), transcript);
     }
 
+    /**
+     * DB-first search: cached responses are returned without touching the vector store or the LLM; otherwise the
+     * listings are read from MongoDB (hard filters + keyword relevance), optionally merged with vector matches, and
+     * the answer and market research are generated only for this new request. The response is then cached.
+     */
     private PropertySearchResult search(PropertySearch search, TranscriptionResult transcript) {
-        int candidates = Math.min(MAX_CANDIDATES, search.limit() * CANDIDATE_FACTOR);
-        List<VectorSearchHit> hits = vectorSearch.search(search.query(), candidates, 0.0, categoryFilter(search.propertyType()));
+        Optional<PropertySearchResult> cached = searchCache.lookup(search);
+        if (cached.isPresent()) {
+            PropertySearchResult hit = cached.get();
+            return new PropertySearchResult(transcript, search.query(), hit.answer(), hit.results(),
+                    hit.marketResearch());
+        }
+        List<PropertyMatch> matches = matches(search);
+        String answer = answerGenerator.answer(search.query(), matches);
+        PropertySearchResult result = new PropertySearchResult(transcript, search.query(), answer, matches,
+                marketResearch(search));
+        searchCache.store(search, result);
+        return result;
+    }
 
+    /**
+     * Matching listings, MongoDB first: relevance of the buyer's words in the stored listing text, then any extra
+     * listings found with vector similarity (at least {@code learnai.vector.search-threshold}). Sold listings and
+     * listings that fail the filters are dropped.
+     */
+    private List<PropertyMatch> matches(PropertySearch search) {
+        Map<String, Double> vectorScores = vectorScores(search);
+        List<PropertyMatch> matches = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (PropertyCatalog.Match candidate : catalog.search(search, search.limit() + vectorScores.size())) {
+            Property property = candidate.property();
+            Double vectorScore = vectorScores.remove(property.id());
+            double score = vectorScore == null ? candidate.relevance()
+                    : Math.max(vectorScore, candidate.relevance());
+            matches.add(toMatch(property, score, search));
+            seen.add(property.id());
+        }
+        if (!vectorScores.isEmpty()) {
+            Map<String, Property> found = properties.findAllById(vectorScores.keySet()).stream()
+                    .collect(Collectors.toMap(Property::id, Function.identity()));
+            vectorScores.entrySet().stream()
+                    .filter(e -> !seen.contains(e.getKey()))
+                    .map(e -> found.get(e.getKey()) == null ? null
+                            : toMatch(found.get(e.getKey()), e.getValue(), search))
+                    .filter(Objects::nonNull)
+                    .filter(m -> matches(m, search))
+                    .sorted(Comparator.comparing(PropertyMatch::score).reversed())
+                    .forEach(matches::add);
+        }
+        return matches.stream().limit(search.limit()).toList();
+    }
+
+    /** Vector matches with at least the configured similarity; empty when the vector store is disabled or fails. */
+    private Map<String, Double> vectorScores(PropertySearch search) {
         Map<String, Double> scores = new LinkedHashMap<>();
-        for (VectorSearchHit hit : hits) {
-            Object propertyId = hit.metadata() == null ? null : hit.metadata().get(PROPERTY_ID_METADATA);
-            if (propertyId != null) {
-                scores.putIfAbsent(propertyId.toString(), hit.score());
+        if (!vectorSearch.isEnabled()) {
+            return scores;
+        }
+        int candidates = Math.min(MAX_CANDIDATES, search.limit() * CANDIDATE_FACTOR);
+        try {
+            for (VectorSearchHit hit : vectorSearch.search(search.query(), candidates, vectorSearchThreshold,
+                    categoryFilter(search.propertyType()))) {
+                Object propertyId = hit.metadata() == null ? null : hit.metadata().get(PROPERTY_ID_METADATA);
+                if (propertyId != null) {
+                    scores.putIfAbsent(propertyId.toString(), hit.score());
+                }
             }
         }
-        Map<String, Property> found = properties.findAllById(scores.keySet()).stream()
-                .collect(Collectors.toMap(Property::id, Function.identity()));
+        catch (RuntimeException e) {
+            log.warn("Vector search failed, using MongoDB matches only: {}", e.getMessage());
+        }
+        return scores;
+    }
 
-        List<PropertyMatch> matches = scores.entrySet().stream()
-                .map(e -> found.get(e.getKey()) == null ? null : toMatch(found.get(e.getKey()), e.getValue(), search))
-                .filter(Objects::nonNull)
-                .filter(m -> matches(m, search))
-                .limit(search.limit())
-                .toList();
-        return new PropertySearchResult(transcript, search.query(), answerGenerator.answer(search.query(), matches), matches);
+    /** Price statistics from MongoDB plus Gemini's reading of them (the summary is null without a chat model). */
+    private MarketResearch marketResearch(PropertySearch search) {
+        MarketResearch research = catalog.research(search);
+        String summary = answerGenerator.summarizeMarket(search.query(), research);
+        return summary == null ? research : research.withAiSummary(summary);
     }
 
     /**
@@ -202,6 +278,7 @@ public class PropertyService {
                 d.coordinates(), d.price(), d.currency(), d.sellerName(), d.sellerContact(), request.buyerName().trim(),
                 request.buyerContact().trim(), now));
         removeFromVectorStore(sold);
+        searchCache.invalidate();
         return purchase;
     }
 
@@ -215,16 +292,26 @@ public class PropertyService {
         PropertyDetails normalized = details.normalized();
         Property property = new Property(UUID.randomUUID().toString(), normalized, PropertyStatus.AVAILABLE, source,
                 transcript, null, clock.instant(), null, null);
-        String vectorDocumentId = index(property);
+        // MongoDB is the source of truth: save first, then index best-effort so a failing/hanging LLM never loses a listing.
+        Property saved = properties.save(property);
+        searchCache.invalidate();
+        if (!indexOnCreate) {
+            log.info("Vector indexing on create is disabled; property {} is searchable from MongoDB only", saved.id());
+            return saved;
+        }
+        String vectorDocumentId = index(saved);
+        if (vectorDocumentId == null) {
+            return saved;
+        }
         try {
-            return properties.save(property.withVectorDocumentId(vectorDocumentId));
+            mongoTemplate.updateFirst(query(where("_id").is(saved.id())),
+                    new Update().set(Property.VECTOR_DOCUMENT_ID, vectorDocumentId), Property.class);
         }
         catch (RuntimeException e) {
-            if (vectorDocumentId != null) {
-                deleteVectorQuietly(vectorDocumentId);
-            }
-            throw e;
+            log.warn("Property {} is saved but its vector id could not be stored: {}", saved.id(), e.getMessage());
+            return saved;
         }
+        return saved.withVectorDocumentId(vectorDocumentId);
     }
 
     /** Embeds the listing in the vector store; returns null (listing is saved but not searchable) if that fails. */

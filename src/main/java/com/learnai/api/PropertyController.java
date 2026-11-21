@@ -60,8 +60,8 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 
 /**
- * Sellers list urban or rural properties with a form or by voice; buyers search them (RAG over the vector store,
- * typed or spoken) and buy them.
+ * Sellers list urban or rural properties with a form or by voice; buyers search them (MongoDB first, with optional
+ * vector matches and an LLM answer, typed or spoken) and buy them.
  */
 @RestController
 @RequestMapping("/api/properties")
@@ -237,7 +237,8 @@ public class PropertyController {
         List<PropertyMatch> matches = result.results().stream()
                 .map(m -> new PropertyMatch(m.property().publicView(), m.score(), m.distanceKm()))
                 .toList();
-        return new PropertySearchResult(result.transcription(), result.query(), result.answer(), matches);
+        return new PropertySearchResult(result.transcription(), result.query(), result.answer(), matches,
+                result.marketResearch());
     }
 
     @ExceptionHandler(IncompletePropertyException.class)

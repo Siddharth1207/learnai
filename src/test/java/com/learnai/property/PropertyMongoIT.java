@@ -52,6 +52,8 @@ class PropertyMongoIT {
     void cleanUp() {
         mongoTemplate.getCollection("properties").drop();
         mongoTemplate.getCollection("purchases").drop();
+        mongoTemplate.getCollection("property_search_cache").drop();
+        mongoTemplate.getCollection("property_search_state").drop();
         mongoTemplate.getCollection("vector_store_property_it").deleteMany(new org.bson.Document());
     }
 
@@ -82,6 +84,22 @@ class PropertyMongoIT {
         assertThatThrownBy(() -> service.purchase(farm.id(), new PurchaseRequest("Other", "x")))
                 .isInstanceOf(PropertyNotAvailableException.class);
         assertThat(service.search(orchard).results()).extracting(m -> m.property().id()).doesNotContain(farm.id());
+    }
+
+    @Test
+    void repeatedSearchIsServedFromTheMongoCache() {
+        Property flat = service.createFromForm(PropertyFixtures.urbanFlat());
+        PropertySearch search = new PropertySearch("sunny flat with balcony", null, null, null, null, null, 5);
+
+        PropertySearchResult first = service.search(search);
+        assertThat(first.results()).extracting(m -> m.property().id()).contains(flat.id());
+
+        PropertySearchResult second = service.search(search);
+
+        assertThat(second.results()).hasSameSizeAs(first.results());
+        assertThat(second.answer()).isEqualTo(first.answer());
+        assertThat(mongoTemplate.getCollection("property_search_cache").estimatedDocumentCount()).isPositive();
+        assertThat(mongoTemplate.getCollection("property_search_cache").find().first().getLong("hits")).isPositive();
     }
 
     /** The Atlas search index is built asynchronously, so retry until it returns results. */

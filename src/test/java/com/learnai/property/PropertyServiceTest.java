@@ -3,6 +3,7 @@ package com.learnai.property;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
@@ -52,15 +53,19 @@ class PropertyServiceTest {
     private final AudioTranscriptionService transcription = mock(AudioTranscriptionService.class);
     private final PropertyExtractor extractor = mock(PropertyExtractor.class);
     private final PropertyAnswerGenerator answerGenerator = mock(PropertyAnswerGenerator.class);
+    private final PropertyCatalog catalog = mock(PropertyCatalog.class);
+    private final PropertySearchCache searchCache = mock(PropertySearchCache.class);
     private final Resource audio = new ByteArrayResource(new byte[] {1});
 
     private final PropertyService service = new PropertyService(properties, purchases, mongoTemplate, vectorSearch,
-            transcription, extractor, answerGenerator, Validation.buildDefaultValidatorFactory().getValidator(),
-            Clock.fixed(NOW, ZoneOffset.UTC));
+            transcription, extractor, answerGenerator, Validation.buildDefaultValidatorFactory().getValidator(), catalog,
+            searchCache, Clock.fixed(NOW, ZoneOffset.UTC), 0.9, true);
 
     PropertyServiceTest() {
         when(properties.save(any(Property.class))).thenAnswer(inv -> inv.getArgument(0));
         when(purchases.save(any(Purchase.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(searchCache.lookup(any())).thenReturn(Optional.empty());
+        when(catalog.research(any())).thenReturn(emptyResearch());
     }
 
     @Test
@@ -76,6 +81,7 @@ class PropertyServiceTest {
         assertThat(property.createdAt()).isEqualTo(NOW);
         assertThat(property.details().currency()).isEqualTo("INR");
         assertThat(property.details().title()).isEqualTo("Urban property in Pune");
+        verify(searchCache).invalidate();
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<TextEntry>> entries = ArgumentCaptor.forClass(List.class);
@@ -157,7 +163,8 @@ class PropertyServiceTest {
         Property near = saved("near", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
         Property sold = saved("sold", PropertyFixtures.urbanFlat(), PropertyStatus.SOLD);
         Property far = saved("far", PropertyFixtures.ruralFarm(), PropertyStatus.AVAILABLE);
-        when(vectorSearch.search(eq("flat in pune"), anyInt(), eq(0.0), eq(PropertyService.categoryFilter(null))))
+        when(vectorSearch.isEnabled()).thenReturn(true);
+        when(vectorSearch.search(eq("flat in pune"), anyInt(), eq(0.9), eq(PropertyService.categoryFilter(null))))
                 .thenReturn(List.of(hit("sold", 0.9), hit("near", 0.8), hit("far", 0.7), hit("deleted", 0.6)));
         when(properties.findAllById(any())).thenReturn(List.of(near, sold, far));
         when(answerGenerator.answer(eq("flat in pune"), anyList())).thenReturn("Listing near fits best.");
@@ -177,7 +184,8 @@ class PropertyServiceTest {
     void searchAppliesPriceAndTypeFilters() {
         Property flat = saved("flat", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
         Property farm = saved("farm", PropertyFixtures.ruralFarm(), PropertyStatus.AVAILABLE);
-        when(vectorSearch.search(any(), anyInt(), eq(0.0), eq("category == 'property-rural'")))
+        when(vectorSearch.isEnabled()).thenReturn(true);
+        when(vectorSearch.search(any(), anyInt(), eq(0.9), eq("category == 'property-rural'")))
                 .thenReturn(List.of(hit("flat", 0.9), hit("farm", 0.8)));
         when(properties.findAllById(any())).thenReturn(List.of(flat, farm));
 
@@ -192,7 +200,8 @@ class PropertyServiceTest {
     void voiceSearchUsesEnglishTranscriptAsQuery() {
         TranscriptionResult transcript = new TranscriptionResult("hi", "...", true, "farm near Pune", "t.txt");
         when(transcription.transcribe(audio, MP3, HINDI)).thenReturn(transcript);
-        when(vectorSearch.search(eq("farm near Pune"), eq(15), eq(0.0), any())).thenReturn(List.of());
+        when(vectorSearch.isEnabled()).thenReturn(true);
+        when(vectorSearch.search(eq("farm near Pune"), eq(15), eq(0.9), any())).thenReturn(List.of());
 
         PropertySearchResult result = service.searchByVoice(audio, MP3, HINDI,
                 new PropertySearch(null, null, null, null, null, null, 3));
@@ -217,6 +226,7 @@ class PropertyServiceTest {
         assertThat(purchase.coordinates()).isEqualTo(new Coordinates(18.5362, 73.8940));
         assertThat(purchase.purchasedAt()).isEqualTo(NOW);
         verify(vectorSearch).delete(List.of("vec-1"));
+        verify(searchCache).invalidate();
 
         ArgumentCaptor<Query> query = ArgumentCaptor.forClass(Query.class);
         verify(mongoTemplate).findAndModify(query.capture(), any(Update.class), any(FindAndModifyOptions.class),
@@ -245,7 +255,8 @@ class PropertyServiceTest {
     void searchFiltersRentListings() {
         Property sale = saved("sale", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
         Property rent = saved("rent", PropertyFixtures.urbanRent(), PropertyStatus.AVAILABLE);
-        when(vectorSearch.search(eq("flat"), anyInt(), eq(0.0), eq(PropertyService.categoryFilter(null))))
+        when(vectorSearch.isEnabled()).thenReturn(true);
+        when(vectorSearch.search(eq("flat"), anyInt(), eq(0.9), eq(PropertyService.categoryFilter(null))))
                 .thenReturn(List.of(hit("sale", 0.9), hit("rent", 0.8)));
         when(properties.findAllById(any())).thenReturn(List.of(sale, rent));
 
@@ -253,6 +264,60 @@ class PropertyServiceTest {
                 ListingType.RENT));
 
         assertThat(result.results()).extracting(m -> m.property().id()).containsExactly("rent");
+    }
+
+    @Test
+    void searchUsesMongoCatalogWhenVectorStoreIsDisabled() {
+        Property flat = saved("flat", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
+        when(catalog.search(any(), anyInt())).thenReturn(List.of(new PropertyCatalog.Match(flat, 0.75)));
+        when(answerGenerator.answer(eq("sunny flat"), anyList())).thenReturn("Here it is.");
+
+        PropertySearchResult result = service.search(new PropertySearch("sunny flat", null, null, null, null, null, null));
+
+        assertThat(result.answer()).isEqualTo("Here it is.");
+        assertThat(result.results()).singleElement().satisfies(m -> {
+            assertThat(m.property().id()).isEqualTo("flat");
+            assertThat(m.score()).isEqualTo(0.75);
+        });
+        verify(vectorSearch, never()).search(any(), anyInt(), anyDouble(), any());
+        verify(searchCache).store(any(), any());
+    }
+
+    @Test
+    void searchAddsMarketResearchAndCachesTheResponse() {
+        Property flat = saved("flat", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
+        when(catalog.search(any(), anyInt())).thenReturn(List.of(new PropertyCatalog.Match(flat, 1.0)));
+        MarketResearch stats = new MarketResearch(3, new BigDecimal("8000000"), new BigDecimal("8500000"),
+                new BigDecimal("5000000"), new BigDecimal("12000000"), new BigDecimal("7000"), null,
+                Map.of("Pune", 3L), null);
+        when(catalog.research(any())).thenReturn(stats);
+        when(answerGenerator.summarizeMarket(eq("flat in pune"), eq(stats))).thenReturn("Prices in Pune start at 50 lakh.");
+
+        PropertySearchResult result = service.search(new PropertySearch("flat in pune", null, null, null, null, null, null));
+
+        assertThat(result.marketResearch()).isNotNull();
+        assertThat(result.marketResearch().listingCount()).isEqualTo(3);
+        assertThat(result.marketResearch().aiSummary()).isEqualTo("Prices in Pune start at 50 lakh.");
+        verify(searchCache).store(any(), any());
+    }
+
+    @Test
+    void cachedSearchSkipsCatalogVectorAndLlm() {
+        Property flat = saved("flat", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
+        MarketResearch stats = new MarketResearch(1, new BigDecimal("9500000"), new BigDecimal("9500000"),
+                new BigDecimal("9500000"), new BigDecimal("9500000"), null, null, Map.of("Pune", 1L), "Cached summary");
+        when(searchCache.lookup(any())).thenReturn(Optional.of(new PropertySearchResult(null, "flat", "Cached answer",
+                List.of(new PropertyMatch(flat, 0.9, null)), stats)));
+
+        PropertySearchResult result = service.search(new PropertySearch("flat", null, null, null, null, null, null));
+
+        assertThat(result.answer()).isEqualTo("Cached answer");
+        assertThat(result.query()).isEqualTo("flat");
+        assertThat(result.marketResearch()).isSameAs(stats);
+        verify(catalog, never()).search(any(), anyInt());
+        verify(vectorSearch, never()).search(any(), anyInt(), anyDouble(), any());
+        verify(answerGenerator, never()).answer(any(), anyList());
+        verify(searchCache, never()).store(any(), any());
     }
 
     @Test
@@ -280,6 +345,10 @@ class PropertyServiceTest {
         Property full = saved("flat", PropertyFixtures.urbanFlat(), PropertyStatus.AVAILABLE);
         assertThat(full.details().sellerContact()).isEqualTo("+91 98100 00001");
         assertThat(full.publicView().details().sellerContact()).isEqualTo("+91 ••••• 00001");
+    }
+
+    private static MarketResearch emptyResearch() {
+        return new MarketResearch(0, null, null, null, null, null, null, Map.of(), null);
     }
 
     private static PropertyDetails overrides(Coordinates coordinates) {

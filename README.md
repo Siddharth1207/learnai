@@ -128,9 +128,12 @@ The integration test `MongoVectorSearchIT` runs against the Docker MongoDB with 
 ## Property listings (sellers) and purchases (buyers)
 
 Sellers list **URBAN** or **RURAL** properties with coordinates, either by filling a form or by speaking. Listings are
-stored in MongoDB (`properties` collection) and their text is embedded in the vector store (`category` metadata
-`property-urban` / `property-rural`), so buyers can search them in natural language (typed or spoken). The search is
-RAG: the best listings are retrieved from MongoDB Atlas Vector Search and Gemini answers the buyer's request from them.
+stored in MongoDB (`properties` collection) first and are searchable from there with no LLM involved. When the vector
+store is enabled their text is also embedded (`category` metadata `property-urban` / `property-rural`), so buyers can
+search in natural language (typed or spoken) with additional semantic matches. The search is RAG: hard filters and
+keyword matches come from MongoDB, optional vector matches are added (similarity ≥ 0.9), market statistics are
+aggregated from MongoDB, and Gemini writes the buyer answer and market summary. Repeated or similar searches are
+served from a semantic cache (MongoDB, cosine similarity ≥ 0.9) and never reach the vector store or Gemini.
 
 | Endpoint | Description |
 |----------|-------------|
@@ -156,9 +159,10 @@ returned by a purchase or a paid `CONTACT_UNLOCK` order.
 
 
 Requirements: MongoDB (`docker compose up -d`) for all endpoints. Voice endpoints need `LEARNAI_CHAT_MODEL=google-genai`
-and `GEMINI_API_KEY` (503 otherwise). Search needs `LEARNAI_VECTOR_STORE=mongodb-atlas` (503 otherwise); listings created
-while the vector store is disabled are saved but not searchable (`vectorDocumentId: null`). The default
-`LEARNAI_VECTOR_FILTER_FIELDS` (`source,category`) is enough; no index change is needed.
+and `GEMINI_API_KEY` (503 otherwise). Search works with MongoDB alone; `LEARNAI_VECTOR_STORE=mongodb-atlas` adds
+semantic matches and `GEMINI_API_KEY` adds the answer, market summary and embedding-based cache reuse. Listings
+created while the vector store is disabled are saved and searchable from MongoDB (`vectorDocumentId: null`). The
+default `LEARNAI_VECTOR_FILTER_FIELDS` (`source,category`) is enough; no index change is needed.
 
 ### Form
 
@@ -216,16 +220,48 @@ curl -H 'Content-Type: application/json' http://localhost:8080/api/properties/se
   "near": {"latitude": 18.52, "longitude": 73.86}, "radiusKm": 100, "topK": 5
 }'
 # -> {"query": "...", "answer": "Listing 9f2c... fits best: 5-acre irrigated orchard ...",
-#     "results": [{"property": {...}, "score": 0.81, "distanceKm": 58.3}]}
+#     "results": [{"property": {...}, "score": 0.81, "distanceKm": 58.3}],
+#     "marketResearch": {"listingCount": 4, "averagePrice": 5200000, "medianPrice": 4800000,
+#       "minPrice": 3500000, "maxPrice": 7500000, "averagePricePerSqFt": 42.5,
+#       "listingsByCity": {"Pune": 3, "Nashik": 1}, "aiSummary": "..."}}
 ```
 
-Only `query` is required. Sold listings are never returned. `answer` is null when no chat model is configured.
-Spoken search takes the same filters as form fields:
+Only `query` is required. Sold listings are never returned. `answer` is null when no chat model is configured;
+`marketResearch.aiSummary` is null in the same case. `score` is the higher of the vector similarity and the share of
+query keywords found in the listing (0..1). Spoken search takes the same filters as form fields:
 
 ```bash
 curl -F file=@request.mp3 -F inputLanguage=hi -F maxPrice=5000000 -F latitude=18.52 -F longitude=73.86 -F radiusKm=100 \
   http://localhost:8080/api/properties/search/voice
 ```
+
+#### Search pipeline (MongoDB first, LLM only for new requests)
+
+1. **Semantic cache** (`property_search_cache` collection). A request reuses a cached response when the hard filters
+   match, the entry is younger than `learnai.search-cache.ttl` (1 hour) and the query embeddings are at least
+   `learnai.search-cache.similarity-threshold` (0.9) similar. A hit skips every step below. Without an embedding model
+   (no `GEMINI_API_KEY`), only an exact case-insensitive query match is served from the cache. Creating or selling a
+   listing bumps a corpus version stored in `property_search_state`, so stale results are never returned.
+2. **MongoDB matches.** `PropertyCatalog` applies the hard filters (`status=AVAILABLE`, type, listing type, price range,
+   radius) in the query and ranks the listings by how many of the buyer's words appear in the stored text (title,
+   description, city, urban/rural details). If no listing shares a keyword, the newest filtered listings are returned.
+3. **Optional vector matches.** When the vector store is enabled, listings whose embedding is at least
+   `learnai.vector.search-threshold` (0.9) similar are merged in; a failure here only logs and the MongoDB matches are
+   returned, so search keeps working without Mongo Atlas or Gemini.
+4. **Answer and market research.** Gemini writes the buyer answer from the matched listings (masked text) and a market
+   summary from MongoDB aggregates: count, average/median/min/max price, price per square foot, average rent deposit
+   for `RENT` searches and listings per city. Both are generated only on a cache miss and then cached.
+
+Listings are saved in MongoDB before indexing. Set `LEARNAI_VECTOR_INDEX_ON_CREATE=false` to skip vector indexing
+entirely (listings are still created and found by steps 2-4).
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `LEARNAI_VECTOR_SEARCH_THRESHOLD` | `0.9` | minimum vector similarity for a search match |
+| `LEARNAI_VECTOR_INDEX_ON_CREATE` | `true` | embed new listings after they are saved |
+| `LEARNAI_SEARCH_CACHE_ENABLED` | `true` | enable the MongoDB semantic search cache |
+| `LEARNAI_SEARCH_CACHE_THRESHOLD` | `0.9` | cosine similarity needed to reuse a cached search |
+| `LEARNAI_SEARCH_CACHE_TTL` | `PT1H` | how long a cached search stays valid |
 
 ### Purchase
 
